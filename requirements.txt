@@ -1,0 +1,9 @@
+numpy
+pandas
+openpyxl
+scipy
+scikit-learn
+matplotlib
+python-docx
+pytest
+

@@ -1,0 +1,5 @@
+﻿min_segment_size,max_segments,chosen_segments,at_max_segments,bic_converged,min_bic
+30,15,15,True,False,3905.6054345865177
+40,15,15,True,False,3910.4931288351686
+60,15,15,True,False,4020.71406979293
+80,15,13,False,True,4490.480490121039

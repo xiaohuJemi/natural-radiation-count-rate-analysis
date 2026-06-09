@@ -1,0 +1,150 @@
+{
+  "positioning": {
+    "current_claim_level": "exploratory_time_series_analysis",
+    "validated_coal_gangue_recognition": false,
+    "reason": "single unlabeled count-rate sequence; no ground truth or sensor metadata"
+  },
+  "data": {
+    "rows": 1407,
+    "sample_index_min": 1,
+    "sample_index_max": 2813,
+    "count_rate_min": 40.0,
+    "count_rate_max": 166.0,
+    "count_rate_mean": 100.25230987917556,
+    "count_rate_std_sample": 25.711821121264443,
+    "ma30_min": 60.36666666666667,
+    "ma30_max": 144.23333333333332,
+    "ma30_mean": 100.9586115142719,
+    "ma30_std_sample": 23.018767923060892,
+    "sample_step_values": {
+      "2.0": 1406
+    }
+  },
+  "missing_values": {
+    "ma30_count_rate": 29,
+    "ma60_count_rate": 59,
+    "std30_count_rate": 9,
+    "slope30_count_rate": 29,
+    "gmm_state": 29
+  },
+  "workbook_validation": {
+    "row_count": 1407,
+    "trailing_ma30_rows": 1378,
+    "trailing_ma30_matches": 1378,
+    "max_ma30_error": 3.33386651618639e-11,
+    "formula_rows_checked": 0,
+    "formula_rows_matching": 0,
+    "formula_check_available": false,
+    "note_cells": []
+  },
+  "thresholds": {
+    "baseline_mean": 69.11933333333333,
+    "baseline_std": 7.4501832293409915,
+    "warning_threshold": 83.72169246284167,
+    "high_threshold": 91.46988302135631,
+    "very_high_threshold": 98.92006625069729,
+    "baseline_window": 200,
+    "state_counts": {
+      "very_high_count": 764,
+      "baseline_like_count": 354,
+      "high_count": 207,
+      "elevated_count": 82
+    },
+    "very_high_ratio": 0.5429992892679459,
+    "discriminative_warning": false
+  },
+  "gmm": {
+    "selected_by_bic": {
+      "n_components": 4.0,
+      "n_samples": 1378.0,
+      "aic": 9873.265087164655,
+      "bic": 10077.172236776025,
+      "silhouette": 0.27985234941557074
+    },
+    "silhouette_score_for_selected": 0.27985234941557074,
+    "state_counts": {
+      "gmm_count_state_3": 706,
+      "gmm_count_state_1": 296,
+      "gmm_count_state_4": 251,
+      "gmm_count_state_2": 125,
+      "NaN": 29
+    },
+    "interpretation": "diagnostic comparison only; not validated coal-gangue labels"
+  },
+  "isolation_forest": {
+    "contamination": 0.06,
+    "high_count_anomaly_samples": 36,
+    "interpretation": "high-count outlier screening only; not roof-rock evidence"
+  },
+  "changepoints": {
+    "chosen_segments": 15,
+    "max_segments": 15,
+    "min_segment_size": 40,
+    "at_max_segments": true,
+    "bic_converged": false,
+    "boundaries": [
+      219,
+      287,
+      333,
+      415,
+      470,
+      512,
+      750,
+      888,
+      988,
+      1090,
+      1147,
+      1187,
+      1227,
+      1289
+    ],
+    "bic_by_segments": {
+      "2": 8103.371476719567,
+      "3": 7222.935197324354,
+      "4": 6076.391285021657,
+      "5": 5618.482891160358,
+      "6": 5218.713771943429,
+      "7": 4921.234703562008,
+      "8": 4837.854156048886,
+      "9": 4640.382623167848,
+      "10": 4449.231803610911,
+      "11": 4319.1816770555315,
+      "12": 4212.422237849614,
+      "13": 4113.401357620974,
+      "14": 4006.8235228246845,
+      "15": 3910.4931288351686
+    },
+    "interpretation": "exploratory count-rate segmentation only"
+  },
+  "outputs": {
+    "processed_features": "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\processed_radiation_features.csv",
+    "segments": "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\changepoint_segments.csv",
+    "state_counts": "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\state_counts.csv",
+    "figures": [
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\fig01_time_series.png",
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\fig02_distribution.png",
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\fig03_rolling_stats.png",
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\fig04_changepoints.png",
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\fig05_gmm_states.png",
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\fig06_method_comparison.png",
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\concept01_radiation_mechanism_diagram.png"
+    ],
+    "diagnostic_tables": {
+      "changepoint_max_segments": "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\diagnostics\\changepoint_max_segments_sensitivity.csv",
+      "changepoint_min_size": "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\diagnostics\\changepoint_min_size_sensitivity.csv",
+      "threshold_sensitivity": "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\diagnostics\\threshold_sensitivity.csv",
+      "poisson_thresholds": "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\diagnostics\\poisson_thresholds.csv",
+      "gmm_model_selection": "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\diagnostics\\gmm_model_selection.csv",
+      "isolation_forest_sensitivity": "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\diagnostics\\isolation_forest_sensitivity.csv"
+    },
+    "diagnostic_figures": [
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\diagnostics\\fig08_changepoint_bic.png",
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\diagnostics\\fig09_changepoint_max_segments_sensitivity.png",
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\diagnostics\\fig10_threshold_sensitivity.png",
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\diagnostics\\fig11_baseline_qq_plot.png",
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\diagnostics\\fig12_gmm_aic_bic.png",
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\diagnostics\\fig13_gmm_silhouette.png",
+      "C:\\Users\\xiaohu\\Documents\\New project\\outputs\\diagnostics\\fig14_isolation_forest_sensitivity.png"
+    ]
+  }
+}
