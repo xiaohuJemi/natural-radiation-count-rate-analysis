@@ -30,6 +30,16 @@ references/*.pdf
 reports/competitor_review_round*.md
 reports/round2_review_action_plan.md
 reports/teacher_confirmed_optimization_plan.md
+reports/current_planning_after_teacher_feedback.md
+
+# Extracted text from reference PDFs (PDFs themselves are already ignored)
+reports/pdf_extracted_*.txt
+
+# Generated report figures (large PNGs)
+reports/progress_report_figures/
+
+# Generated docx analysis artifacts
+docx_analysis_*/
 
 # Redundant backward-compatibility wrapper
 new_data_analysis.py

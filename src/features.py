@@ -69,5 +69,6 @@ def build_caving_time_features(
         return group
 
     if group_keys:
-        return out.groupby(group_keys, group_keys=False, sort=False).apply(add_group_features)
+        frames = [add_group_features(group) for _, group in out.groupby(group_keys, sort=False)]
+        return pd.concat(frames).sort_index()
     return add_group_features(out)

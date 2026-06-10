@@ -24,9 +24,13 @@ from .config import (
 from .data_loader import load_caving_condition_data
 from .features import build_caving_time_features
 from .models import (
+    CandidateWindowConfig,
     add_dynamic_threshold,
     add_poisson_confidence_bands,
     detect_changepoints,
+    detect_candidate_baseline_windows,
+    estimate_baseline_from_candidate_windows,
+    extract_threshold_events,
     separate_components,
     summarize_background_drift,
     summarize_threshold_crossing,
@@ -428,6 +432,207 @@ def analyze_poisson_fluctuation(
     return processed.reset_index(drop=True), pd.DataFrame(summary_rows)
 
 
+def analyze_candidate_baseline_windows(
+    data_dir: str | Path = NEW_DATA_DIR,
+    config: CandidateWindowConfig | None = None,
+) -> pd.DataFrame:
+    """Identify stable low-count candidate windows using only count-rate time series."""
+    raw = load_caving_condition_data(data_dir, sample_interval_s=SAMPLE_INTERVAL_S)
+    features = build_caving_time_features(raw, engineering_threshold=ENGINEERING_THRESHOLD)
+    rows = []
+    for source_file, group in features.groupby("source_file", sort=False):
+        group = group.reset_index(drop=True)
+        windows = detect_candidate_baseline_windows(
+            group,
+            value_column="ma10_count_rate",
+            time_column="time_s",
+            sample_interval_s=SAMPLE_INTERVAL_S,
+            config=config,
+        )
+        if windows.empty:
+            continue
+        windows.insert(0, "source_file", source_file)
+        windows.insert(1, "condition", group["condition"].iloc[0])
+        windows.insert(2, "condition_label", group["condition_label"].iloc[0])
+        rows.append(windows)
+    if not rows:
+        return pd.DataFrame()
+    return pd.concat(rows, ignore_index=True)
+
+
+def analyze_adaptive_threshold_methods(
+    data_dir: str | Path = NEW_DATA_DIR,
+    stat_k: float = 3.0,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Compare fixed, static-background, and candidate-background thresholds."""
+    raw = load_caving_condition_data(data_dir, sample_interval_s=SAMPLE_INTERVAL_S)
+    features = build_caving_time_features(raw, engineering_threshold=ENGINEERING_THRESHOLD)
+    candidate_windows = analyze_candidate_baseline_windows(data_dir=data_dir)
+    component_frames = []
+    summary_rows = []
+    method_columns = {
+        "fixed_absolute_85_4": "fixed_absolute_threshold",
+        "static_initial_delta": "static_initial_delta_threshold",
+        "candidate_stat_3sigma": "candidate_stat_threshold",
+        "candidate_poisson_99": "candidate_poisson_99_threshold",
+        "candidate_reference_delta": "candidate_reference_delta_threshold",
+    }
+
+    for source_file, group in features.groupby("source_file", sort=False):
+        group = group.reset_index(drop=True)
+        window_group = candidate_windows[candidate_windows["source_file"] == source_file]
+        estimate = estimate_baseline_from_candidate_windows(
+            group,
+            window_group,
+            value_column="ma10_count_rate",
+            sample_interval_s=SAMPLE_INTERVAL_S,
+        )
+        n_initial = max(1, int(round(5.0 / SAMPLE_INTERVAL_S)))
+        initial_background = float(group["ma10_count_rate"].iloc[:n_initial].median())
+
+        working = group.copy()
+        working["candidate_background_estimate"] = estimate.background
+        working["candidate_background_sigma"] = estimate.sigma
+        working["candidate_background_source"] = estimate.source
+        working["candidate_radiation_component"] = working["ma10_count_rate"] - estimate.background
+        working["fixed_absolute_threshold"] = ENGINEERING_THRESHOLD
+        working["static_initial_delta_threshold"] = initial_background + BACKGROUND_DELTA
+        working["candidate_stat_threshold"] = estimate.background + stat_k * estimate.sigma
+        working["candidate_reference_delta_threshold"] = estimate.background + BACKGROUND_DELTA
+        working = add_poisson_confidence_bands(
+            working,
+            background_column="candidate_background_estimate",
+            value_column="ma10_count_rate",
+            effective_window_s=POISSON_EFFECTIVE_WINDOW_S,
+            confidence_levels=(0.99,),
+        )
+        working["candidate_poisson_99_threshold"] = working["poisson_upper_99"]
+
+        for method, threshold_column in method_columns.items():
+            flag_column = f"above_{method}"
+            excess_column = f"excess_{method}"
+            working[flag_column] = working["ma10_count_rate"] >= working[threshold_column]
+            working[excess_column] = (working["ma10_count_rate"] - working[threshold_column]).clip(lower=0.0)
+            crossing = summarize_threshold_crossing(
+                working,
+                flag_column=flag_column,
+                value_column="ma10_count_rate",
+                sample_interval_s=SAMPLE_INTERVAL_S,
+            )
+            positive_excess = working.loc[working[excess_column] > 0, excess_column]
+            summary_rows.append(
+                {
+                    "source_file": source_file,
+                    "condition": group["condition"].iloc[0],
+                    "condition_label": group["condition_label"].iloc[0],
+                    "method": method,
+                    "threshold_column": threshold_column,
+                    "candidate_background": estimate.background,
+                    "candidate_sigma": estimate.sigma,
+                    "candidate_window_count": estimate.n_windows,
+                    "candidate_window_samples": estimate.n_samples,
+                    "candidate_background_source": estimate.source,
+                    "initial_background": initial_background,
+                    "threshold_mean": float(working[threshold_column].mean()),
+                    "threshold_min": float(working[threshold_column].min()),
+                    "threshold_max": float(working[threshold_column].max()),
+                    "total_excess_area": float(working[excess_column].sum() * SAMPLE_INTERVAL_S),
+                    "max_excess": float(working[excess_column].max()),
+                    "mean_positive_excess": float(positive_excess.mean()) if not positive_excess.empty else 0.0,
+                    **asdict(crossing),
+                }
+            )
+        component_frames.append(working)
+    return pd.concat(component_frames, ignore_index=True), pd.DataFrame(summary_rows)
+
+
+def analyze_high_count_events(
+    data_dir: str | Path = NEW_DATA_DIR,
+    min_duration_s: float = 0.3,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Extract event-level features from adaptive threshold crossings."""
+    components, _ = analyze_adaptive_threshold_methods(data_dir=data_dir)
+    methods = {
+        "fixed_absolute_85_4": "fixed_absolute_threshold",
+        "static_initial_delta": "static_initial_delta_threshold",
+        "candidate_stat_3sigma": "candidate_stat_threshold",
+        "candidate_poisson_99": "candidate_poisson_99_threshold",
+        "candidate_reference_delta": "candidate_reference_delta_threshold",
+    }
+    event_frames = []
+    for source_file, group in components.groupby("source_file", sort=False):
+        group = group.reset_index(drop=True)
+        for method, threshold_column in methods.items():
+            flag_column = f"above_{method}"
+            excess_column = f"excess_{method}"
+            events = extract_threshold_events(
+                group,
+                flag_column=flag_column,
+                value_column="ma10_count_rate",
+                threshold_column=threshold_column,
+                excess_column=excess_column,
+                baseline_column="candidate_background_estimate",
+                sample_interval_s=SAMPLE_INTERVAL_S,
+                min_duration_s=min_duration_s,
+            )
+            if events.empty:
+                continue
+            events.insert(0, "source_file", source_file)
+            events.insert(1, "condition", group["condition"].iloc[0])
+            events.insert(2, "condition_label", group["condition_label"].iloc[0])
+            events.insert(3, "method", method)
+            events.insert(4, "threshold_column", threshold_column)
+            event_frames.append(events)
+
+    if event_frames:
+        event_table = pd.concat(event_frames, ignore_index=True)
+    else:
+        event_table = pd.DataFrame(
+            columns=[
+                "source_file",
+                "condition",
+                "condition_label",
+                "method",
+                "threshold_column",
+                "event_id",
+                "start_time_s",
+                "end_time_s",
+                "duration_s",
+                "peak_value",
+                "max_excess",
+                "excess_area",
+            ]
+        )
+
+    summary_rows = []
+    conditions = components[["source_file", "condition", "condition_label"]].drop_duplicates()
+    for _, condition_row in conditions.iterrows():
+        for method in methods:
+            subset = event_table[
+                (event_table["source_file"] == condition_row["source_file"])
+                & (event_table["method"] == method)
+            ]
+            summary_rows.append(
+                {
+                    "source_file": condition_row["source_file"],
+                    "condition": condition_row["condition"],
+                    "condition_label": condition_row["condition_label"],
+                    "method": method,
+                    "event_count": int(len(subset)),
+                    "total_event_duration_s": float(subset["duration_s"].sum()) if not subset.empty else 0.0,
+                    "max_event_duration_s": float(subset["duration_s"].max()) if not subset.empty else 0.0,
+                    "total_excess_area": float(subset["excess_area"].sum()) if not subset.empty else 0.0,
+                    "max_peak_value": float(subset["peak_value"].max()) if not subset.empty else 0.0,
+                    "max_relative_peak_from_background": (
+                        float(subset["relative_peak_from_background"].max()) if not subset.empty else 0.0
+                    ),
+                    "first_event_start_time_s": float(subset["start_time_s"].min()) if not subset.empty else None,
+                    "last_event_end_time_s": float(subset["end_time_s"].max()) if not subset.empty else None,
+                }
+            )
+    return event_table, pd.DataFrame(summary_rows)
+
+
 def analyze_new_data(
     data_dir: str | Path = NEW_DATA_DIR,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -795,6 +1000,193 @@ def plot_poisson_fluctuation(
     return paths
 
 
+def plot_candidate_baseline_windows(
+    features: pd.DataFrame,
+    windows: pd.DataFrame,
+    output_dir: Path,
+) -> list[Path]:
+    paths = []
+    for source_file, group in features.groupby("source_file", sort=False):
+        group = group.reset_index(drop=True)
+        window_group = windows[windows["source_file"] == source_file]
+        selected = window_group[window_group["selected_candidate"].astype(bool)]
+        fig, ax = plt.subplots(figsize=(11.5, 4.8))
+        ax.plot(group["time_s"], group["count_rate"], color="#94a3b8", lw=0.6, alpha=0.5, label="raw count rate")
+        ax.plot(group["time_s"], group["ma10_count_rate"], color="#111827", lw=1.4, label="ma10 count rate")
+        ax.axhline(
+            float(window_group["low_mean_limit"].iloc[0]),
+            color="#2563eb",
+            lw=1.0,
+            ls="--",
+            label="low-count mean limit",
+        )
+        used_candidate_label = False
+        for _, row in window_group[window_group["is_candidate_baseline_window"].astype(bool)].iterrows():
+            ax.axvspan(
+                row["start_time_s"],
+                row["end_time_s"],
+                color="#bbf7d0",
+                alpha=0.18,
+                label="candidate windows" if not used_candidate_label else None,
+            )
+            used_candidate_label = True
+        for _, row in selected.iterrows():
+            ax.axvspan(
+                row["start_time_s"],
+                row["end_time_s"],
+                color="#22c55e",
+                alpha=0.45,
+                label="selected candidate" if _ == selected.index[0] else None,
+            )
+        ax.set_title(f"Candidate Local-Baseline Windows - {group['condition'].iloc[0]}")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Count rate (cps)")
+        ax.grid(True, alpha=0.25)
+        ax.legend(fontsize=8, ncol=2, loc="upper left")
+        path = output_dir / f"fig_candidate_baseline_windows_{group['condition'].iloc[0]}.png"
+        _save(fig, path)
+        paths.append(path)
+    return paths
+
+
+def plot_adaptive_threshold_methods(
+    components: pd.DataFrame,
+    summary: pd.DataFrame,
+    output_dir: Path,
+) -> list[Path]:
+    paths = []
+    threshold_styles = [
+        ("fixed_absolute_threshold", "fixed 85.4", "#64748b", "--"),
+        ("static_initial_delta_threshold", "initial B + delta", "#f97316", "-."),
+        ("candidate_stat_threshold", "candidate B + 3 sigma", "#7c3aed", ":"),
+        ("candidate_poisson_99_threshold", "candidate Poisson 99%", "#dc2626", "--"),
+        ("candidate_reference_delta_threshold", "candidate B + reference delta", "#16a34a", "-"),
+    ]
+    for _, group in components.groupby("source_file", sort=False):
+        fig, ax = plt.subplots(figsize=(11.5, 4.8))
+        ax.plot(group["time_s"], group["ma10_count_rate"], color="#111827", lw=1.35, label="ma10 count rate")
+        ax.plot(
+            group["time_s"],
+            group["candidate_background_estimate"],
+            color="#2563eb",
+            lw=1.0,
+            label="candidate local background",
+        )
+        for column, label, color, linestyle in threshold_styles:
+            ax.plot(group["time_s"], group[column], color=color, lw=1.0, ls=linestyle, label=label)
+        high = group["above_candidate_reference_delta"].astype(bool)
+        ax.fill_between(
+            group["time_s"],
+            group["ma10_count_rate"],
+            group["candidate_reference_delta_threshold"],
+            where=high,
+            color="#bbf7d0",
+            alpha=0.35,
+            label="above candidate B + reference delta",
+        )
+        ax.set_title(f"Adaptive Threshold Comparison - {group['condition'].iloc[0]}")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Count rate (cps)")
+        ax.grid(True, alpha=0.25)
+        ax.legend(fontsize=7, ncol=2, loc="upper left")
+        path = output_dir / f"fig_adaptive_threshold_methods_{group['condition'].iloc[0]}.png"
+        _save(fig, path)
+        paths.append(path)
+
+    conditions = list(summary["condition"].drop_duplicates())
+    methods = list(summary["method"].drop_duplicates())
+    colors = ["#64748b", "#f97316", "#7c3aed", "#dc2626", "#16a34a"]
+    x = list(range(len(conditions)))
+    width = 0.15
+    for metric, ylabel, file_name in [
+        ("longest_run_duration_s", "Longest threshold-crossing run (s)", "fig_adaptive_longest_run_summary.png"),
+        ("total_excess_area", "Total excess area (cps*s)", "fig_adaptive_excess_area_summary.png"),
+    ]:
+        fig, ax = plt.subplots(figsize=(11.0, 4.8))
+        for offset, method in enumerate(methods):
+            values = []
+            for condition in conditions:
+                row = summary[(summary["condition"] == condition) & (summary["method"] == method)].iloc[0]
+                values.append(row[metric])
+            shifted = [value + (offset - 2) * width for value in x]
+            ax.bar(shifted, values, width=width, label=method, color=colors[offset % len(colors)])
+        ax.set_xticks(x)
+        ax.set_xticklabels(conditions)
+        ax.set_ylabel(ylabel)
+        ax.grid(True, axis="y", alpha=0.25)
+        ax.legend(fontsize=7, ncol=2)
+        path = output_dir / file_name
+        _save(fig, path)
+        paths.append(path)
+    return paths
+
+
+def plot_high_count_events(
+    event_table: pd.DataFrame,
+    event_summary: pd.DataFrame,
+    output_dir: Path,
+) -> list[Path]:
+    paths = []
+    focus_methods = ["candidate_poisson_99", "candidate_reference_delta"]
+    focus_summary = event_summary[event_summary["method"].isin(focus_methods)]
+    conditions = list(focus_summary["condition"].drop_duplicates())
+    x = list(range(len(conditions)))
+    width = 0.32
+
+    for metric, ylabel, file_name in [
+        ("event_count", "Event count", "fig_high_count_event_count_summary.png"),
+        ("total_excess_area", "Total event excess area (cps*s)", "fig_high_count_event_area_summary.png"),
+        ("max_event_duration_s", "Max event duration (s)", "fig_high_count_event_duration_summary.png"),
+    ]:
+        fig, ax = plt.subplots(figsize=(9.8, 4.8))
+        for offset, method in enumerate(focus_methods):
+            values = []
+            for condition in conditions:
+                row = focus_summary[
+                    (focus_summary["condition"] == condition) & (focus_summary["method"] == method)
+                ].iloc[0]
+                values.append(row[metric])
+            shifted = [value + (offset - 0.5) * width for value in x]
+            ax.bar(shifted, values, width=width, label=method)
+        ax.set_xticks(x)
+        ax.set_xticklabels(conditions)
+        ax.set_ylabel(ylabel)
+        ax.grid(True, axis="y", alpha=0.25)
+        ax.legend(fontsize=8)
+        path = output_dir / file_name
+        _save(fig, path)
+        paths.append(path)
+
+    if event_table.empty:
+        return paths
+
+    focus_events = event_table[event_table["method"].isin(focus_methods)]
+    colors = {"candidate_poisson_99": "#dc2626", "candidate_reference_delta": "#16a34a"}
+    for source_file, group in focus_events.groupby("source_file", sort=False):
+        fig, ax = plt.subplots(figsize=(11.0, 3.8))
+        y_positions = {method: idx for idx, method in enumerate(focus_methods)}
+        for _, event in group.iterrows():
+            y = y_positions[event["method"]]
+            ax.barh(
+                y,
+                event["duration_s"],
+                left=event["start_time_s"],
+                height=0.32,
+                color=colors.get(event["method"], "#64748b"),
+                alpha=0.75,
+            )
+            ax.plot(event["peak_time_s"], y, marker="o", ms=4, color="#111827")
+        ax.set_yticks([y_positions[method] for method in focus_methods])
+        ax.set_yticklabels(focus_methods)
+        ax.set_xlabel("Time (s)")
+        ax.set_title(f"High-Count Event Timeline - {group['condition'].iloc[0]}")
+        ax.grid(True, axis="x", alpha=0.25)
+        path = output_dir / f"fig_high_count_event_timeline_{group['condition'].iloc[0]}.png"
+        _save(fig, path)
+        paths.append(path)
+    return paths
+
+
 def run_new_data_analysis(output_dir: str | Path = NEW_OUTPUT_DIR) -> list[Path]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -807,6 +1199,9 @@ def run_new_data_analysis(output_dir: str | Path = NEW_OUTPUT_DIR) -> list[Path]
     rule_sensitivity = analyze_stage_rule_sensitivity()
     baseline_summary, threshold_sensitivity = analyze_initial_baseline_sensitivity()
     poisson_components, poisson_summary = analyze_poisson_fluctuation()
+    candidate_windows = analyze_candidate_baseline_windows()
+    adaptive_components, adaptive_summary = analyze_adaptive_threshold_methods()
+    high_count_events, high_count_event_summary = analyze_high_count_events()
     paths = [
         output_dir / "caving_time_series_components.csv",
         output_dir / "caving_condition_summary.csv",
@@ -820,6 +1215,11 @@ def run_new_data_analysis(output_dir: str | Path = NEW_OUTPUT_DIR) -> list[Path]
         output_dir / "caving_threshold_sensitivity.csv",
         output_dir / "caving_poisson_components.csv",
         output_dir / "caving_poisson_summary.csv",
+        output_dir / "candidate_baseline_windows.csv",
+        output_dir / "adaptive_threshold_components.csv",
+        output_dir / "adaptive_threshold_summary.csv",
+        output_dir / "high_count_events.csv",
+        output_dir / "high_count_event_summary.csv",
     ]
     processed.to_csv(paths[0], index=False, encoding="utf-8-sig")
     summary.to_csv(paths[1], index=False, encoding="utf-8-sig")
@@ -833,6 +1233,11 @@ def run_new_data_analysis(output_dir: str | Path = NEW_OUTPUT_DIR) -> list[Path]
     threshold_sensitivity.to_csv(paths[9], index=False, encoding="utf-8-sig")
     poisson_components.to_csv(paths[10], index=False, encoding="utf-8-sig")
     poisson_summary.to_csv(paths[11], index=False, encoding="utf-8-sig")
+    candidate_windows.to_csv(paths[12], index=False, encoding="utf-8-sig")
+    adaptive_components.to_csv(paths[13], index=False, encoding="utf-8-sig")
+    adaptive_summary.to_csv(paths[14], index=False, encoding="utf-8-sig")
+    high_count_events.to_csv(paths[15], index=False, encoding="utf-8-sig")
+    high_count_event_summary.to_csv(paths[16], index=False, encoding="utf-8-sig")
     paths.extend(plot_background_strategy_overlays(strategy_components, output_dir))
     paths.extend(plot_strategy_summary(strategy_summary, output_dir))
     paths.extend(plot_caving_stage_segments(features, stage_segments, output_dir))
@@ -840,4 +1245,7 @@ def run_new_data_analysis(output_dir: str | Path = NEW_OUTPUT_DIR) -> list[Path]
     paths.extend(plot_initial_baseline_sensitivity(baseline_summary, output_dir))
     paths.extend(plot_threshold_sensitivity(threshold_sensitivity, output_dir))
     paths.extend(plot_poisson_fluctuation(poisson_components, poisson_summary, output_dir))
+    paths.extend(plot_candidate_baseline_windows(features, candidate_windows, output_dir))
+    paths.extend(plot_adaptive_threshold_methods(adaptive_components, adaptive_summary, output_dir))
+    paths.extend(plot_high_count_events(high_count_events, high_count_event_summary, output_dir))
     return paths

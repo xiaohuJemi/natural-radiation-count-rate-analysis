@@ -6,8 +6,11 @@ from src.data_loader import load_caving_condition_data, parse_caving_condition
 from src.features import build_caving_time_features
 from src.models import add_dynamic_threshold, separate_components, summarize_threshold_crossing
 from src.new_data_workflow import (
+    analyze_adaptive_threshold_methods,
     analyze_background_strategies,
+    analyze_candidate_baseline_windows,
     analyze_caving_stages,
+    analyze_high_count_events,
     analyze_initial_baseline_sensitivity,
     analyze_poisson_fluctuation,
     analyze_stage_min_size_sensitivity,
@@ -117,3 +120,46 @@ def test_poisson_fluctuation_outputs_confidence_bands_and_summary():
     assert components["poisson_upper_tail_p"].between(0, 1).all()
     assert summary["longest_run_duration_s"].min() >= 0
     assert summary["max_excess_over_poisson"].max() > 0
+
+
+def test_candidate_baseline_windows_outputs_candidates_for_each_condition():
+    windows = analyze_candidate_baseline_windows()
+    assert set(windows["condition"]) == {"normal_caving", "minor_caving", "excessive_caving"}
+    selected = windows[windows["selected_candidate"]]
+    assert set(selected["condition"]) == {"normal_caving", "minor_caving", "excessive_caving"}
+    assert selected["window_cv"].max() <= 0.05
+    assert selected["window_range_ratio"].max() <= 0.18
+
+
+def test_adaptive_threshold_methods_compare_all_conditions_and_methods():
+    components, summary = analyze_adaptive_threshold_methods()
+    assert len(components) == 1508
+    assert set(summary["condition"]) == {"normal_caving", "minor_caving", "excessive_caving"}
+    assert set(summary["method"]) == {
+        "fixed_absolute_85_4",
+        "static_initial_delta",
+        "candidate_stat_3sigma",
+        "candidate_poisson_99",
+        "candidate_reference_delta",
+    }
+    assert len(summary) == 15
+    assert components["candidate_background_estimate"].notna().all()
+    assert summary["candidate_window_count"].min() > 0
+    assert summary["longest_run_duration_s"].min() >= 0
+
+
+def test_high_count_events_extract_event_level_metrics():
+    events, summary = analyze_high_count_events()
+    assert set(summary["condition"]) == {"normal_caving", "minor_caving", "excessive_caving"}
+    assert set(summary["method"]) == {
+        "fixed_absolute_85_4",
+        "static_initial_delta",
+        "candidate_stat_3sigma",
+        "candidate_poisson_99",
+        "candidate_reference_delta",
+    }
+    assert len(summary) == 15
+    assert not events.empty
+    assert {"duration_s", "peak_value", "max_excess", "excess_area"}.issubset(events.columns)
+    assert events["duration_s"].min() >= 0.3
+    assert {"candidate_poisson_99", "candidate_reference_delta"}.issubset(set(events["method"]))

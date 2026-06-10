@@ -47,6 +47,27 @@ class CrossingSummary:
     longest_run_end_time_s: float | None
 
 
+@dataclass(frozen=True)
+class CandidateWindowConfig:
+    window_seconds: float = 5.0
+    min_duration_s: float = 3.0
+    low_mean_quantile: float = 0.35
+    max_cv: float = 0.05
+    max_range_ratio: float = 0.18
+    max_abs_slope_per_s: float = 1.0
+    max_step_change: float = 4.0
+    max_selected_windows: int = 3
+
+
+@dataclass(frozen=True)
+class CandidateBaselineEstimate:
+    background: float
+    sigma: float
+    n_windows: int
+    n_samples: int
+    source: str
+
+
 GMM_FEATURES = ["ma30_count_rate", "std30_count_rate", "diff_ma30_count_rate"]
 IFOREST_FEATURES = ["count_rate", "ma30_count_rate", "std30_count_rate", "diff_ma30_count_rate"]
 
@@ -105,6 +126,150 @@ def estimate_background(
     if method == "exponential":
         return values.ewm(alpha=alpha, adjust=False).mean().rename("background_estimate")
     raise ValueError(f"Unsupported background estimation method: {method}")
+
+
+def detect_candidate_baseline_windows(
+    df: pd.DataFrame,
+    value_column: str = "ma10_count_rate",
+    time_column: str = "time_s",
+    sample_interval_s: float = 0.1,
+    config: CandidateWindowConfig | None = None,
+) -> pd.DataFrame:
+    """Find stable low-count windows usable as candidate local-background references.
+
+    The function only uses the count-rate sequence. It does not claim the windows are
+    true scraper-conveyor clearing windows; they are data-derived candidate baselines.
+    """
+    config = config or CandidateWindowConfig()
+    if sample_interval_s <= 0:
+        raise ValueError("sample_interval_s must be positive")
+    if value_column not in df.columns:
+        raise ValueError(f"{value_column} column is required")
+    if time_column not in df.columns:
+        raise ValueError(f"{time_column} column is required")
+
+    values = df[value_column].astype(float).reset_index(drop=True)
+    times = df[time_column].astype(float).reset_index(drop=True)
+    window_size = max(2, int(round(config.window_seconds / sample_interval_s)))
+    min_size = max(2, int(round(config.min_duration_s / sample_interval_s)))
+    if window_size < min_size:
+        window_size = min_size
+    if len(values) < window_size:
+        return pd.DataFrame()
+
+    mean_limit = float(values.rolling(window_size, min_periods=1).mean().quantile(config.low_mean_quantile))
+    rows: list[dict[str, object]] = []
+    x = np.arange(window_size, dtype=float) * sample_interval_s
+    for start in range(0, len(values) - window_size + 1):
+        end = start + window_size
+        segment = values.iloc[start:end].to_numpy(dtype=float)
+        mean = float(np.mean(segment))
+        std = float(np.std(segment, ddof=1))
+        min_value = float(np.min(segment))
+        max_value = float(np.max(segment))
+        cv = float(std / mean) if mean else np.inf
+        range_ratio = float((max_value - min_value) / mean) if mean else np.inf
+        slope = float(np.polyfit(x, segment, deg=1)[0]) if window_size >= 2 else 0.0
+        max_step = float(np.max(np.abs(np.diff(segment)))) if window_size >= 2 else 0.0
+        low_count = mean <= mean_limit
+        stable = (
+            cv <= config.max_cv
+            and range_ratio <= config.max_range_ratio
+            and abs(slope) <= config.max_abs_slope_per_s
+            and max_step <= config.max_step_change
+        )
+        is_candidate = bool(low_count and stable)
+        # Lower is better; each term is normalized against the configured gate.
+        score = (
+            (mean / mean_limit if mean_limit else np.inf)
+            + (cv / config.max_cv if config.max_cv else np.inf)
+            + (range_ratio / config.max_range_ratio if config.max_range_ratio else np.inf)
+            + (abs(slope) / config.max_abs_slope_per_s if config.max_abs_slope_per_s else np.inf)
+            + (max_step / config.max_step_change if config.max_step_change else np.inf)
+        )
+        rows.append(
+            {
+                "candidate_id": int(len(rows) + 1),
+                "start_index": int(start),
+                "end_index_exclusive": int(end),
+                "start_time_s": float(times.iloc[start]),
+                "end_time_s": float(times.iloc[end - 1]),
+                "duration_s": float(window_size * sample_interval_s),
+                "n_samples": int(window_size),
+                "window_mean": mean,
+                "window_median": float(np.median(segment)),
+                "window_std": std,
+                "window_min": min_value,
+                "window_max": max_value,
+                "window_cv": cv,
+                "window_range_ratio": range_ratio,
+                "window_slope_per_s": slope,
+                "window_max_step_change": max_step,
+                "low_mean_limit": mean_limit,
+                "is_low_count_window": bool(low_count),
+                "is_stable_window": bool(stable),
+                "is_candidate_baseline_window": is_candidate,
+                "selection_score": float(score),
+                "selected_candidate": False,
+            }
+        )
+
+    windows = pd.DataFrame(rows)
+    candidates = windows[windows["is_candidate_baseline_window"]].sort_values(
+        ["selection_score", "start_index"],
+        ascending=[True, True],
+    )
+    selected_indices: list[int] = []
+    selected_ranges: list[tuple[int, int]] = []
+    for idx, row in candidates.iterrows():
+        start = int(row["start_index"])
+        end = int(row["end_index_exclusive"])
+        overlaps = any(start < selected_end and end > selected_start for selected_start, selected_end in selected_ranges)
+        if overlaps:
+            continue
+        selected_indices.append(int(idx))
+        selected_ranges.append((start, end))
+        if len(selected_indices) >= config.max_selected_windows:
+            break
+    if selected_indices:
+        windows.loc[selected_indices, "selected_candidate"] = True
+    return windows.sort_values("start_index").reset_index(drop=True)
+
+
+def estimate_baseline_from_candidate_windows(
+    df: pd.DataFrame,
+    windows: pd.DataFrame,
+    value_column: str = "ma10_count_rate",
+    fallback_initial_seconds: float = 5.0,
+    sample_interval_s: float = 0.1,
+) -> CandidateBaselineEstimate:
+    """Estimate a local background level from selected candidate windows."""
+    if value_column not in df.columns:
+        raise ValueError(f"{value_column} column is required")
+    if sample_interval_s <= 0:
+        raise ValueError("sample_interval_s must be positive")
+
+    selected = windows[windows["selected_candidate"].astype(bool)] if not windows.empty else pd.DataFrame()
+    if not selected.empty:
+        background = float(selected["window_median"].median())
+        sigma = float(selected["window_std"].median())
+        return CandidateBaselineEstimate(
+            background=background,
+            sigma=max(sigma, 1e-6),
+            n_windows=int(len(selected)),
+            n_samples=int(selected["n_samples"].sum()),
+            source="selected_candidate_windows",
+        )
+
+    n_initial = max(1, int(round(fallback_initial_seconds / sample_interval_s)))
+    segment = df[value_column].astype(float).iloc[:n_initial]
+    return CandidateBaselineEstimate(
+        background=float(segment.median()),
+        sigma=max(float(segment.std(ddof=1)), 1e-6),
+        n_windows=0,
+        n_samples=int(len(segment)),
+        source="initial_window_fallback",
+    )
 
 
 def separate_components(
@@ -244,6 +409,91 @@ def summarize_threshold_crossing(
         longest_run_start_time_s=None if run_start is None else float(df["time_s"].iloc[run_start]),
         longest_run_end_time_s=None if run_end is None else float(df["time_s"].iloc[run_end]),
     )
+
+
+def extract_threshold_events(
+    df: pd.DataFrame,
+    flag_column: str,
+    value_column: str,
+    threshold_column: str,
+    excess_column: str | None = None,
+    baseline_column: str | None = None,
+    sample_interval_s: float = 0.1,
+    min_duration_s: float = 0.3,
+) -> pd.DataFrame:
+    """Convert continuous threshold crossings into event-level features."""
+    required = [flag_column, value_column, threshold_column, "time_s"]
+    for column in required:
+        if column not in df.columns:
+            raise ValueError(f"{column} column is required")
+    if excess_column is not None and excess_column not in df.columns:
+        raise ValueError(f"{excess_column} column is required")
+    if baseline_column is not None and baseline_column not in df.columns:
+        raise ValueError(f"{baseline_column} column is required")
+    if sample_interval_s <= 0:
+        raise ValueError("sample_interval_s must be positive")
+
+    min_samples = max(1, int(np.ceil(min_duration_s / sample_interval_s)))
+    mask = df[flag_column].fillna(False).to_numpy(dtype=bool)
+    rows: list[dict[str, object]] = []
+    start: int | None = None
+    for idx, flag in enumerate(mask):
+        if flag and start is None:
+            start = idx
+        if start is not None and ((not flag) or idx == len(mask) - 1):
+            end = idx - 1 if not flag else idx
+            n_samples = end - start + 1
+            if n_samples >= min_samples:
+                segment = df.iloc[start : end + 1]
+                values = segment[value_column].astype(float)
+                thresholds = segment[threshold_column].astype(float)
+                if excess_column is None:
+                    excess = (values - thresholds).clip(lower=0.0)
+                else:
+                    excess = segment[excess_column].astype(float).clip(lower=0.0)
+                peak_local_idx = int(values.to_numpy().argmax())
+                peak_row = segment.iloc[peak_local_idx]
+                duration_s = float(n_samples * sample_interval_s)
+                relative_peak = None
+                mean_relative = None
+                if baseline_column is not None:
+                    baseline = segment[baseline_column].astype(float)
+                    relative = values - baseline
+                    relative_peak = float(relative.max())
+                    mean_relative = float(relative.mean())
+                rise_slope = 0.0
+                fall_slope = 0.0
+                if peak_local_idx > 0:
+                    rise_time = max(peak_local_idx * sample_interval_s, sample_interval_s)
+                    rise_slope = float((values.iloc[peak_local_idx] - values.iloc[0]) / rise_time)
+                tail_samples = n_samples - peak_local_idx - 1
+                if tail_samples > 0:
+                    fall_time = max(tail_samples * sample_interval_s, sample_interval_s)
+                    fall_slope = float((values.iloc[-1] - values.iloc[peak_local_idx]) / fall_time)
+                rows.append(
+                    {
+                        "event_id": int(len(rows) + 1),
+                        "start_index": int(start),
+                        "end_index": int(end),
+                        "start_time_s": float(segment["time_s"].iloc[0]),
+                        "end_time_s": float(segment["time_s"].iloc[-1]),
+                        "duration_s": duration_s,
+                        "n_samples": int(n_samples),
+                        "peak_time_s": float(peak_row["time_s"]),
+                        "peak_value": float(values.max()),
+                        "mean_value": float(values.mean()),
+                        "threshold_mean": float(thresholds.mean()),
+                        "max_excess": float(excess.max()),
+                        "mean_excess": float(excess.mean()),
+                        "excess_area": float(excess.sum() * sample_interval_s),
+                        "relative_peak_from_background": relative_peak,
+                        "relative_mean_from_background": mean_relative,
+                        "rise_slope_per_s": rise_slope,
+                        "fall_slope_per_s": fall_slope,
+                    }
+                )
+            start = None
+    return pd.DataFrame(rows)
 
 
 def summarize_background_drift(
