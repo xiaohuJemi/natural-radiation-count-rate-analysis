@@ -44,3 +44,30 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         (count < count.shift(1)) & (count < count.shift(-1))
     ).fillna(False)
     return out
+
+
+def build_caving_time_features(
+    df: pd.DataFrame,
+    engineering_threshold: float = 85.4,
+) -> pd.DataFrame:
+    """Add time-aware features for 0.1 s caving count-rate sequences."""
+    out = df.copy()
+    group_keys = ["source_file"] if "source_file" in out.columns else None
+
+    def add_group_features(group: pd.DataFrame) -> pd.DataFrame:
+        group = group.copy()
+        count = group["count_rate"]
+        group["ma10_count_rate"] = count.rolling(10, min_periods=1).mean()
+        group["ma30_count_rate"] = count.rolling(30, min_periods=1).mean()
+        group["std10_count_rate"] = count.rolling(10, min_periods=2).std(ddof=1)
+        group["std30_count_rate"] = count.rolling(30, min_periods=5).std(ddof=1)
+        group["diff_count_rate"] = count.diff().fillna(0.0)
+        group["slope10_count_rate"] = _rolling_slope(count, 10)
+        group["above_85_4_raw"] = count >= engineering_threshold
+        group["above_85_4_ma10"] = group["ma10_count_rate"] >= engineering_threshold
+        group["above_85_4_ma30"] = group["ma30_count_rate"] >= engineering_threshold
+        return group
+
+    if group_keys:
+        return out.groupby(group_keys, group_keys=False, sort=False).apply(add_group_features)
+    return add_group_features(out)

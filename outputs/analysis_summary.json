@@ -14,7 +14,7 @@
     "count_rate_std_sample": 25.711821121264443,
     "ma30_min": 60.36666666666667,
     "ma30_max": 144.23333333333332,
-    "ma30_mean": 100.9586115142719,
+    "ma30_mean": 100.95861151427194,
     "ma30_std_sample": 23.018767923060892,
     "sample_step_values": {
       "2.0": 1406
@@ -38,11 +38,11 @@
     "note_cells": []
   },
   "thresholds": {
-    "baseline_mean": 69.11933333333333,
+    "baseline_mean": 69.11933333333337,
     "baseline_std": 7.4501832293409915,
-    "warning_threshold": 83.72169246284167,
-    "high_threshold": 91.46988302135631,
-    "very_high_threshold": 98.92006625069729,
+    "warning_threshold": 83.72169246284172,
+    "high_threshold": 91.46988302135634,
+    "very_high_threshold": 98.92006625069735,
     "baseline_window": 200,
     "state_counts": {
       "very_high_count": 764,
@@ -55,18 +55,20 @@
   },
   "gmm": {
     "selected_by_bic": {
-      "n_components": 4.0,
+      "n_components": 6.0,
       "n_samples": 1378.0,
-      "aic": 9873.265087164655,
-      "bic": 10077.172236776025,
-      "silhouette": 0.27985234941557074
+      "aic": 9770.14153709494,
+      "bic": 10078.616455737783,
+      "silhouette": 0.23595952202861695
     },
-    "silhouette_score_for_selected": 0.27985234941557074,
+    "silhouette_score_for_selected": 0.23595952202861695,
     "state_counts": {
-      "gmm_count_state_3": 706,
-      "gmm_count_state_1": 296,
-      "gmm_count_state_4": 251,
-      "gmm_count_state_2": 125,
+      "gmm_count_state_4": 377,
+      "gmm_count_state_2": 299,
+      "gmm_count_state_1": 297,
+      "gmm_count_state_5": 187,
+      "gmm_count_state_6": 177,
+      "gmm_count_state_3": 41,
       "NaN": 29
     },
     "interpretation": "diagnostic comparison only; not validated coal-gangue labels"

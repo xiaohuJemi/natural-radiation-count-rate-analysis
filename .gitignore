@@ -23,12 +23,22 @@ desktop.ini
 
 # Sensitive data
 datas/data.xlsx
+new_data/
+references/*.pdf
+
+# Internal review and planning documents (not for public upload)
+reports/competitor_review_round*.md
+reports/round2_review_action_plan.md
+reports/teacher_confirmed_optimization_plan.md
+
+# Redundant backward-compatibility wrapper
+new_data_analysis.py
 
 # Generated data files (contain raw count-rate values)
 outputs/processed_radiation_features.csv
 outputs/changepoint_segments.csv
 outputs/state_counts.csv
+outputs/new_data/*.csv
 
 # Generated outputs (uncomment to exclude all outputs from repo)
 # outputs/
-

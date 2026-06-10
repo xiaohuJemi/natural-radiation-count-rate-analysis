@@ -20,6 +20,13 @@ class DataValidation:
     note_cells: list[tuple[str, str]]
 
 
+CONDITION_LABELS = {
+    "normal_caving": "正常放煤",
+    "minor_caving": "少量放煤",
+    "excessive_caving": "过量放煤",
+}
+
+
 def load_radiation_data(path: str | Path) -> pd.DataFrame:
     """Load the teacher-provided count-rate workbook into normalized columns."""
     path = Path(path)
@@ -36,6 +43,49 @@ def load_radiation_data(path: str | Path) -> pd.DataFrame:
     df = df.reset_index(drop=True)
     df["row_number"] = np.arange(1, len(df) + 1)
     return df[["row_number", "sample_index", "count_rate", "ma30_count_rate_source"]]
+
+
+def parse_caving_condition(file_name: str) -> tuple[str, str]:
+    """Parse caving condition from an English-named caving test Excel file."""
+    for condition, chinese_label in CONDITION_LABELS.items():
+        if condition in file_name.lower():
+            return condition, chinese_label
+    return "unknown", "unknown"
+
+
+def load_caving_condition_workbook(path: str | Path, sample_interval_s: float = 0.1) -> pd.DataFrame:
+    """Load one single-column caving test workbook as a count-rate time series."""
+    path = Path(path)
+    raw = pd.read_excel(path, sheet_name="Sheet1", header=None, engine="openpyxl")
+    values = pd.to_numeric(raw.iloc[:, 0], errors="coerce").dropna().astype(float).reset_index(drop=True)
+    condition, condition_label = parse_caving_condition(path.name)
+    out = pd.DataFrame(
+        {
+            "row_number": np.arange(1, len(values) + 1),
+            "sample_index": np.arange(len(values)),
+            "time_s": np.arange(len(values), dtype=float) * float(sample_interval_s),
+            "count_rate": values,
+            "condition": condition,
+            "condition_label": condition_label,
+            "source_file": path.name,
+        }
+    )
+    return out
+
+
+def load_caving_condition_data(
+    directory: str | Path,
+    sample_interval_s: float = 0.1,
+) -> pd.DataFrame:
+    """Load all caving-condition Excel files from a directory."""
+    directory = Path(directory)
+    frames = [
+        load_caving_condition_workbook(path, sample_interval_s=sample_interval_s)
+        for path in sorted(directory.glob("*.xlsx"), key=lambda item: item.name)
+    ]
+    if not frames:
+        raise FileNotFoundError(f"No .xlsx files found in {directory}")
+    return pd.concat(frames, ignore_index=True)
 
 
 def validate_workbook(path: str | Path) -> DataValidation:

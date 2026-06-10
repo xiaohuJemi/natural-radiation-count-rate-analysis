@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from scipy.stats import poisson
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import silhouette_score
 from sklearn.mixture import GaussianMixture
@@ -29,6 +30,21 @@ class ChangePointResult:
     min_segment_size: int
     at_max_segments: bool
     bic_converged: bool
+
+
+@dataclass(frozen=True)
+class CrossingSummary:
+    threshold_column: str
+    value_column: str
+    n_samples: int
+    n_crossing_samples: int
+    crossing_ratio: float
+    first_crossing_time_s: float | None
+    last_crossing_time_s: float | None
+    longest_run_samples: int
+    longest_run_duration_s: float
+    longest_run_start_time_s: float | None
+    longest_run_end_time_s: float | None
 
 
 GMM_FEATURES = ["ma30_count_rate", "std30_count_rate", "diff_ma30_count_rate"]
@@ -65,6 +81,188 @@ def assign_threshold_states(df: pd.DataFrame, thresholds: Thresholds) -> pd.Seri
         else:
             states.append("baseline_like_count")
     return pd.Series(states, index=df.index, name="threshold_state")
+
+
+def estimate_background(
+    series: pd.Series,
+    method: str = "rolling_quantile",
+    initial_seconds: float = 5.0,
+    sample_interval_s: float = 0.1,
+    window_seconds: float = 10.0,
+    quantile: float = 0.2,
+    alpha: float = 0.03,
+) -> pd.Series:
+    """Estimate slow-varying background count rate from a time series."""
+    values = series.astype(float)
+    if method == "initial":
+        n_initial = max(1, int(round(initial_seconds / sample_interval_s)))
+        baseline = float(values.iloc[:n_initial].median())
+        return pd.Series(baseline, index=values.index, name="background_estimate")
+    if method == "rolling_quantile":
+        window = max(3, int(round(window_seconds / sample_interval_s)))
+        background = values.rolling(window, min_periods=1, center=True).quantile(quantile)
+        return background.bfill().ffill().rename("background_estimate")
+    if method == "exponential":
+        return values.ewm(alpha=alpha, adjust=False).mean().rename("background_estimate")
+    raise ValueError(f"Unsupported background estimation method: {method}")
+
+
+def separate_components(
+    df: pd.DataFrame,
+    value_column: str = "ma10_count_rate",
+    method: str = "rolling_quantile",
+    sample_interval_s: float = 0.1,
+    window_seconds: float = 10.0,
+    quantile: float = 0.2,
+    initial_seconds: float = 5.0,
+    alpha: float = 0.03,
+) -> pd.DataFrame:
+    """Split observed count rate into background, radiation contribution, and residual."""
+    out = df.copy()
+    background = estimate_background(
+        out[value_column],
+        method=method,
+        initial_seconds=initial_seconds,
+        sample_interval_s=sample_interval_s,
+        window_seconds=window_seconds,
+        quantile=quantile,
+        alpha=alpha,
+    )
+    out["background_estimate"] = background
+    out["radiation_component"] = out[value_column] - out["background_estimate"]
+    out["noise_residual"] = out["count_rate"] - out[value_column]
+    return out
+
+
+def add_dynamic_threshold(
+    df: pd.DataFrame,
+    delta: float = 25.4,
+    k_sigma: float | None = None,
+    sigma_window_seconds: float = 5.0,
+    sample_interval_s: float = 0.1,
+    value_column: str = "ma10_count_rate",
+) -> pd.DataFrame:
+    """Add a background-relative threshold and crossing flag."""
+    out = df.copy()
+    if "background_estimate" not in out.columns:
+        raise ValueError("background_estimate column is required before adding dynamic threshold")
+    if k_sigma is None:
+        out["dynamic_threshold"] = out["background_estimate"] + delta
+    else:
+        window = max(3, int(round(sigma_window_seconds / sample_interval_s)))
+        sigma = (out[value_column] - out["background_estimate"]).rolling(window, min_periods=3).std(ddof=1)
+        sigma = sigma.bfill().fillna(0.0)
+        out["background_sigma"] = sigma
+        out["dynamic_threshold"] = out["background_estimate"] + k_sigma * sigma
+    out["above_dynamic_threshold"] = out[value_column] >= out["dynamic_threshold"]
+    return out
+
+
+def add_poisson_confidence_bands(
+    df: pd.DataFrame,
+    background_column: str = "background_estimate",
+    value_column: str = "ma10_count_rate",
+    effective_window_s: float = 1.0,
+    confidence_levels: tuple[float, ...] = (0.95, 0.99),
+) -> pd.DataFrame:
+    """Add one-sided Poisson upper confidence bands for background count-rate fluctuation."""
+    if effective_window_s <= 0:
+        raise ValueError("effective_window_s must be positive")
+    out = df.copy()
+    if background_column not in out.columns:
+        raise ValueError(f"{background_column} column is required before adding Poisson bands")
+    if value_column not in out.columns:
+        raise ValueError(f"{value_column} column is required before adding Poisson bands")
+
+    background_rate = out[background_column].astype(float).clip(lower=0.0)
+    observed_rate = out[value_column].astype(float).clip(lower=0.0)
+    expected_counts = background_rate * effective_window_s
+    observed_counts = observed_rate * effective_window_s
+    observed_count_ceiling = np.ceil(observed_counts).astype(int)
+
+    out["poisson_effective_window_s"] = float(effective_window_s)
+    out["poisson_expected_counts"] = expected_counts
+    out["poisson_observed_counts"] = observed_counts
+    out["poisson_sigma_rate"] = np.sqrt(background_rate / effective_window_s)
+    out["poisson_upper_tail_p"] = poisson.sf(observed_count_ceiling - 1, expected_counts)
+
+    for level in confidence_levels:
+        suffix = f"{int(round(level * 100))}"
+        upper_counts = poisson.ppf(level, expected_counts)
+        upper_rate = upper_counts / effective_window_s
+        out[f"poisson_upper_{suffix}"] = upper_rate
+        out[f"poisson_excess_{suffix}"] = observed_rate - upper_rate
+        out[f"above_poisson_{suffix}"] = observed_rate > upper_rate
+    return out
+
+
+def _longest_true_run(mask: pd.Series) -> tuple[int | None, int | None, int]:
+    best_start: int | None = None
+    best_end: int | None = None
+    best_len = 0
+    start: int | None = None
+    values = mask.fillna(False).to_numpy(dtype=bool)
+    for idx, flag in enumerate(values):
+        if flag and start is None:
+            start = idx
+        if start is not None and ((not flag) or idx == len(values) - 1):
+            end = idx - 1 if not flag else idx
+            run_len = end - start + 1
+            if run_len > best_len:
+                best_start = start
+                best_end = end
+                best_len = run_len
+            start = None
+    return best_start, best_end, best_len
+
+
+def summarize_threshold_crossing(
+    df: pd.DataFrame,
+    flag_column: str,
+    value_column: str,
+    sample_interval_s: float = 0.1,
+) -> CrossingSummary:
+    """Summarize threshold-crossing timing and longest continuous run."""
+    mask = df[flag_column].fillna(False).astype(bool)
+    crossing_indices = np.flatnonzero(mask.to_numpy())
+    first_time = None
+    last_time = None
+    if len(crossing_indices) > 0:
+        first_time = float(df["time_s"].iloc[int(crossing_indices[0])])
+        last_time = float(df["time_s"].iloc[int(crossing_indices[-1])])
+    run_start, run_end, run_len = _longest_true_run(mask)
+    return CrossingSummary(
+        threshold_column=flag_column,
+        value_column=value_column,
+        n_samples=int(len(df)),
+        n_crossing_samples=int(mask.sum()),
+        crossing_ratio=float(mask.mean()),
+        first_crossing_time_s=first_time,
+        last_crossing_time_s=last_time,
+        longest_run_samples=int(run_len),
+        longest_run_duration_s=float(run_len * sample_interval_s),
+        longest_run_start_time_s=None if run_start is None else float(df["time_s"].iloc[run_start]),
+        longest_run_end_time_s=None if run_end is None else float(df["time_s"].iloc[run_end]),
+    )
+
+
+def summarize_background_drift(
+    df: pd.DataFrame,
+    sample_interval_s: float = 0.1,
+) -> dict[str, float]:
+    """Summarize the estimated background level and its slow drift."""
+    background = df["background_estimate"].astype(float)
+    time = df["time_s"].astype(float)
+    slope = 0.0
+    if len(df) >= 2 and float(time.max()) > float(time.min()):
+        slope = float(np.polyfit(time, background, deg=1)[0])
+    return {
+        "background_mean": float(background.mean()),
+        "background_min": float(background.min()),
+        "background_max": float(background.max()),
+        "background_range": float(background.max() - background.min()),
+        "background_slope_per_s": slope,
+    }
 
 
 def _scaled_model_matrix(df: pd.DataFrame, feature_cols: list[str]) -> tuple[pd.DataFrame, np.ndarray]:

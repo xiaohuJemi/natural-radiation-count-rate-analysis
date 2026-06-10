@@ -10,11 +10,25 @@ from tests.test_data_loader import (
     test_load_radiation_data_shape_and_columns,
     test_validate_workbook_ma30_values,
 )
+from tests.test_csv_analysis import (
+    test_build_second_level_components_separates_background_and_component,
+    test_summarize_long_csv_reports_high_quantile_runs,
+)
 from tests.test_features import test_build_features_expected_missing_values
 from tests.test_models import (
     test_changepoint_result_reports_truncation_status,
     test_gmm_model_selection_outputs_candidate_range,
     test_threshold_sensitivity_flags_poor_discrimination,
+)
+from tests.test_new_caving_data import (
+    test_background_strategy_comparison_outputs_all_conditions_and_methods,
+    test_caving_features_and_component_separation,
+    test_caving_stage_segmentation_outputs_stage_labels,
+    test_initial_baseline_sensitivity_outputs_windows_and_deltas,
+    test_load_caving_condition_data_time_axis_and_labels,
+    test_parse_caving_condition_ignores_support_number,
+    test_poisson_fluctuation_outputs_confidence_bands_and_summary,
+    test_stage_sensitivity_outputs_min_size_and_rule_profiles,
 )
 
 
@@ -22,10 +36,20 @@ def main() -> None:
     tests = [
         test_load_radiation_data_shape_and_columns,
         test_validate_workbook_ma30_values,
+        test_summarize_long_csv_reports_high_quantile_runs,
+        test_build_second_level_components_separates_background_and_component,
         test_build_features_expected_missing_values,
         test_changepoint_result_reports_truncation_status,
         test_gmm_model_selection_outputs_candidate_range,
         test_threshold_sensitivity_flags_poor_discrimination,
+        test_parse_caving_condition_ignores_support_number,
+        test_load_caving_condition_data_time_axis_and_labels,
+        test_caving_features_and_component_separation,
+        test_background_strategy_comparison_outputs_all_conditions_and_methods,
+        test_caving_stage_segmentation_outputs_stage_labels,
+        test_initial_baseline_sensitivity_outputs_windows_and_deltas,
+        test_stage_sensitivity_outputs_min_size_and_rule_profiles,
+        test_poisson_fluctuation_outputs_confidence_bands_and_summary,
     ]
     for test in tests:
         test()
