@@ -6,7 +6,21 @@
 - `new_data/*.xlsx`：三个带工况文件名的放煤过程计数率序列，按正常放煤、少量放煤、过量放煤做弱标签分析。
 - `new_data/2025-11-28.csv`：另一来源的长时间计数率序列，用于趋势、阈值越限和异常高值段分析。
 
-这些数据来源不同，不能强行合并训练，也不能直接声称已经完成泛化煤矸识别。当前项目定位为：**计数率时间序列规律分析、本底影响拆分、工程阈值复核和后续煤矸识别方法准备**。
+这些数据来源不同，不能强行合并训练，也不能直接声称已经完成泛化煤矸识别。当前项目定位为：**自然伽玛计数率时间序列的局部本底建模、自适应阈值构建和有限数据条件下的信息挖掘方法学预研究**。
+
+## Project motivation
+
+Natural gamma-ray count-rate data should be treated as a physical system time series, not as independent tabular samples. In a top-coal caving face, the detector records a time-varying count process produced by the local radiation background, the moving coal-gangue flow on the scraper conveyor, detector geometry, shielding, and low-level radioactive counting fluctuation.
+
+For the current data, the useful modeling view is:
+
+```text
+X(t) = B(t) + R(t) + e(t)
+```
+
+where `X(t)` is the observed or smoothed count rate, `B(t)` is the local background level of the current data segment, `R(t)` is the relative high-count contribution above the local background, and `e(t)` is statistical counting fluctuation. This makes the problem a time-series information-mining task: estimate a local baseline, decide whether later rises exceed expected fluctuation, and summarize sustained high-count events.
+
+The project therefore focuses on local background windows, adaptive thresholds, Poisson fluctuation bands, change-point segmentation, and event-level features. It does not claim validated generalized coal-gangue classification under multi-mine or multi-support conditions.
 
 ## 数据边界
 
@@ -90,6 +104,11 @@ python new_data_analysis.py
 - `outputs/new_data/caving_threshold_sensitivity.csv`
 - `outputs/new_data/caving_poisson_components.csv`
 - `outputs/new_data/caving_poisson_summary.csv`
+- `outputs/new_data/candidate_baseline_windows.csv`
+- `outputs/new_data/adaptive_threshold_components.csv`
+- `outputs/new_data/adaptive_threshold_summary.csv`
+- `outputs/new_data/high_count_events.csv`
+- `outputs/new_data/high_count_event_summary.csv`
 - `outputs/new_data/fig_background_overlay_*.png`
 - `outputs/new_data/fig_stage_segments_*.png`
 - `outputs/new_data/fig_initial_background_window_sensitivity.png`
@@ -102,6 +121,12 @@ python new_data_analysis.py
 - `outputs/new_data/fig_stage_rule_sensitivity.png`
 - `outputs/new_data/fig_poisson_fluctuation_*.png`
 - `outputs/new_data/fig_poisson_excess_summary.png`
+- `outputs/new_data/fig_candidate_baseline_windows_*.png`
+- `outputs/new_data/fig_adaptive_threshold_methods_*.png`
+- `outputs/new_data/fig_adaptive_longest_run_summary.png`
+- `outputs/new_data/fig_adaptive_excess_area_summary.png`
+- `outputs/new_data/fig_high_count_event_*_summary.png`
+- `outputs/new_data/fig_high_count_event_timeline_*.png`
 
 CSV 输出：
 
@@ -120,8 +145,32 @@ CSV 输出：
 ## 当前方法
 
 - 旧数据：移动平均、滑动标准差、阈值诊断、变点检测、GMM 诊断、异常筛选。
-- 新 Excel：`ma10` 平滑、`85.4cps` 固定阈值、本底估计、相对辐射贡献拆分、动态阈值对照、阶段分割敏感性分析、泊松涨落置信区间分析。
-- CSV：文件级统计、分钟级趋势、秒级平滑、本底估计、相对本底辐射贡献和本底漂移分析。
+- 新 Excel：`ma10` 平滑、候选局部本底窗口挖掘、固定阈值与自适应阈值对比、泊松涨落置信区间、变点阶段分割、高计数事件提取。
+- CSV：文件级统计、分钟级趋势、秒级平滑、局部本底估计、相对本底辐射贡献和高计数段挖掘。
+
+## Representative results
+
+### Candidate local-background windows
+
+![Candidate local-background windows](outputs/new_data/fig_candidate_baseline_windows_normal_caving.png)
+
+The three short Excel caving-condition sequences contain stable low-count windows that can be used as candidate local-background references. Across the sequences, 8 non-overlapping representative windows were selected, and the candidate background estimates concentrate around 60-62 cps.
+
+### Adaptive threshold comparison
+
+![Adaptive threshold comparison](outputs/new_data/fig_adaptive_threshold_methods_normal_caving.png)
+
+The `candidate B + 3 sigma` threshold is sensitive and better interpreted as an early-warning line. The Poisson 99% upper band is more suitable for separating random counting fluctuation from sustained high-count contribution. The `candidate B + reference delta` threshold is stricter and reflects the local-background adaptive-threshold idea.
+
+### High-count event mining
+
+![High-count event area summary](outputs/new_data/fig_high_count_event_area_summary.png)
+
+Representative conclusions:
+
+1. Global mean count rate is not sufficient to explain the three caving-condition sequences; duration, excess area, and event structure are more informative.
+2. Under the Poisson 99% threshold, the excessive-caving sequence shows longer total high-count event duration and larger total excess area than the minor-caving sequence.
+3. Different data sources must be analyzed under their own local backgrounds. The long CSV sequence has a much higher estimated local background range, about 195.16-243.63 cps, so a single absolute threshold should not be directly reused across sources.
 
 ## 验证
 
