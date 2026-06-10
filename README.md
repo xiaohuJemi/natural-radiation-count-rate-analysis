@@ -1,12 +1,12 @@
 # Natural Gamma-Ray Count-Rate Time-Series Analysis
 
-本项目用于分析综采/综放工作面自然伽马射线计数率时间序列。当前研究包含三类来源不同的数据：
+This project analyzes natural gamma-ray count-rate time series from fully mechanized / top-coal caving faces. The study covers three categories of data from distinct sources:
 
-- `datas/data.xlsx`：旧的无标签单变量计数率序列，用于探索性时序分析。
-- `new_data/*.xlsx`：三个带工况文件名的放煤过程计数率序列，按正常放煤、少量放煤、过量放煤做弱标签分析。
-- `new_data/2025-11-28.csv`：另一来源的长时间计数率序列，用于趋势、阈值越限和异常高值段分析。
+- `datas/data.xlsx`: An older unlabeled univariate count-rate series, used for exploratory time-series analysis.
+- `new_data/*.xlsx`: Three caving-process count-rate series labeled by working condition — normal caving, minor caving, and excessive caving — analyzed as a weakly-labeled problem.
+- `new_data/2025-11-28.csv`: A long-duration count-rate series from another source, used for trend analysis, threshold-excursion detection, and high-count segment extraction.
 
-这些数据来源不同，不能强行合并训练，也不能直接声称已经完成泛化煤矸识别。当前项目定位为：**自然伽玛计数率时间序列的局部本底建模、自适应阈值构建和有限数据条件下的信息挖掘方法学预研究**。
+These datasets originate from different sources. They cannot be merged into a single training set, nor do they yet constitute a validated generalized coal-gangue recognition system. This project is scoped as: **a methodological pre-study of local background modeling, adaptive threshold construction, and information mining under limited-data conditions for natural gamma count-rate time series.**
 
 ## Project motivation
 
@@ -22,17 +22,17 @@ where `X(t)` is the observed or smoothed count rate, `B(t)` is the local backgro
 
 The project therefore focuses on local background windows, adaptive thresholds, Poisson fluctuation bands, change-point segmentation, and event-level features. It does not claim validated generalized coal-gangue classification under multi-mine or multi-support conditions.
 
-## 数据边界
+## Data Boundaries
 
-- 老师确认三类数据来源不同，没有绝对对应关系。
-- 三个 Excel 文件按 `0.1s` 采样间隔处理，只研究时间序列计数率。
-- `192/194/198` 等编号不作为建模特征。
-- `85.4cps`、`60cps` 等参数来自韦明辉论文中的现场标定结果，在本文中作为工程基线，不作跨矿井通用阈值。
-- 当前每种工况只有一条序列，不能用采样点数量替代独立样本数量。
+- The advisor confirmed that the three data categories come from different sources and are not directly comparable.
+- The three Excel files are processed at a `0.1 s` sampling interval; only the time-series count rate is studied.
+- Identifiers such as `192/194/198` are not used as modeling features.
+- Parameters like `85.4 cps` and `60 cps` originate from on-site calibration results in Wei Minghui's thesis. They serve as engineering baselines in this study, not as universal thresholds transferable across mines.
+- Currently there is only one sequence per working condition. The number of sampling points within a sequence cannot substitute for the number of independent sequences.
 
-## 本地数据
+## Local Data Setup
 
-数据和 PDF 文献默认不提交到仓库。运行前请在本机放置：
+Data files and PDF references are not committed to the repository. Before running, ensure the following files are present locally:
 
 ```text
 datas/data.xlsx
@@ -43,11 +43,11 @@ new_data/2025-11-28.csv
 references/*.pdf
 ```
 
-`.gitignore` 已默认忽略 `datas/data.xlsx`、`new_data/`、`references/*.pdf` 和逐点输出 CSV。
+`.gitignore` already excludes `datas/data.xlsx`, `new_data/`, `references/*.pdf`, and per-point output CSVs.
 
-## 环境准备
+## Environment Setup
 
-推荐使用 Anaconda Python，或自行创建虚拟环境：
+Anaconda Python is recommended, or create a virtual environment manually:
 
 ```powershell
 python -m venv .venv
@@ -55,33 +55,33 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## 运行方式
+## Running the Analysis
 
-统一入口为 `main.py`：
+The unified entry point is `main.py`:
 
 ```powershell
-# 旧无标签数据分析
+# Old unlabeled data analysis
 python main.py --analysis old
 
-# 三个 Excel 工况序列分析
+# Three Excel caving-condition sequence analysis
 python main.py --analysis new
 
-# CSV 长时间序列分析
+# CSV long-series analysis
 python main.py --analysis csv
 
-# 全部分析
+# Run all analyses
 python main.py --analysis all
 ```
 
-兼容入口：
+Compatibility entry point (legacy):
 
 ```powershell
 python new_data_analysis.py
 ```
 
-## 主要输出
+## Main Outputs
 
-旧数据输出：
+Old data outputs:
 
 - `outputs/processed_radiation_features.csv`
 - `outputs/changepoint_segments.csv`
@@ -90,7 +90,7 @@ python new_data_analysis.py
 - `outputs/fig*.png`
 - `outputs/diagnostics/`
 
-新 Excel 输出：
+New Excel outputs:
 
 - `outputs/new_data/caving_condition_summary.csv`
 - `outputs/new_data/caving_time_series_components.csv`
@@ -128,7 +128,7 @@ python new_data_analysis.py
 - `outputs/new_data/fig_high_count_event_*_summary.png`
 - `outputs/new_data/fig_high_count_event_timeline_*.png`
 
-CSV 输出：
+CSV outputs:
 
 - `outputs/new_data/csv_long_series_summary.csv`
 - `outputs/new_data/csv_long_series_minute_trend.csv`
@@ -142,11 +142,11 @@ CSV 输出：
 - `outputs/new_data/fig_csv_background_components.png`
 - `outputs/new_data/fig_csv_relative_component.png`
 
-## 当前方法
+## Current Methods
 
-- 旧数据：移动平均、滑动标准差、阈值诊断、变点检测、GMM 诊断、异常筛选。
-- 新 Excel：`ma10` 平滑、候选局部本底窗口挖掘、固定阈值与自适应阈值对比、泊松涨落置信区间、变点阶段分割、高计数事件提取。
-- CSV：文件级统计、分钟级趋势、秒级平滑、局部本底估计、相对本底辐射贡献和高计数段挖掘。
+- Old data: moving average, rolling standard deviation, threshold diagnostics, change-point detection, GMM diagnostics, anomaly screening.
+- New Excel: `ma10` smoothing, candidate local-background window mining, fixed vs. adaptive threshold comparison, Poisson fluctuation confidence bands, change-point stage segmentation, high-count event extraction.
+- CSV: file-level statistics, minute-level trends, second-level smoothing, local background estimation, relative background radiation contribution, and high-count segment mining.
 
 ## Representative results
 
@@ -154,7 +154,7 @@ CSV 输出：
 
 ![Candidate local-background windows](outputs/new_data/fig_candidate_baseline_windows_normal_caving.png)
 
-The three short Excel caving-condition sequences contain stable low-count windows that can be used as candidate local-background references. Across the sequences, 8 non-overlapping representative windows were selected, and the candidate background estimates concentrate around 60-62 cps.
+The three short Excel caving-condition sequences contain stable low-count windows that can serve as candidate local-background references. Across the sequences, 8 non-overlapping representative windows were selected, and the candidate background estimates cluster around 60–62 cps.
 
 ### Adaptive threshold comparison
 
@@ -168,11 +168,11 @@ The `candidate B + 3 sigma` threshold is sensitive and better interpreted as an 
 
 Representative conclusions:
 
-1. Global mean count rate is not sufficient to explain the three caving-condition sequences; duration, excess area, and event structure are more informative.
+1. Global mean count rate alone is insufficient to characterize the three caving-condition sequences; duration, excess area, and event structure carry more discriminating information.
 2. Under the Poisson 99% threshold, the excessive-caving sequence shows longer total high-count event duration and larger total excess area than the minor-caving sequence.
 3. Different data sources must be analyzed under their own local backgrounds. The long CSV sequence has a much higher estimated local background range, about 195.16-243.63 cps, so a single absolute threshold should not be directly reused across sources.
 
-## 验证
+## Verification
 
 ```powershell
 python scripts/run_tests.py
@@ -181,12 +181,12 @@ python main.py --analysis new
 python main.py --analysis csv
 ```
 
-## 正确结论边界
+## Scope of Conclusions
 
-可以说：
+Supported by this work:
 
-> 当前计数率序列存在可描述的时间变化规律；基于本底估计、工程阈值和越限持续时间，可以对不同放煤工况进行解释性分析。
+> The count-rate sequences exhibit well-defined temporal variation patterns. Background estimation, engineering thresholds, and excursion duration together enable explanatory analysis that distinguishes different caving conditions.
 
-不能说：
+NOT supported by this work:
 
-> 当前方法已经在多工作面、多支架、多矿井条件下验证了煤矸智能识别能力。
+> The method has been validated as a general intelligent coal-gangue recognition system across multiple faces, supports, or mines.
