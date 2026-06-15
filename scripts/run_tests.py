@@ -34,7 +34,13 @@ from tests.test_new_caving_data import (
     test_load_caving_condition_data_time_axis_and_labels,
     test_parse_caving_condition_ignores_support_number,
     test_poisson_fluctuation_outputs_confidence_bands_and_summary,
+    test_residual_diagnostics_outputs_condition_level_summary,
     test_stage_sensitivity_outputs_min_size_and_rule_profiles,
+)
+from tests.test_residual_diagnostics import (
+    test_compute_residual_diagnostics_reports_positive_runs_and_energy,
+    test_compute_residual_series_subtracts_background_and_positive_component,
+    test_estimate_dominant_period_detects_synthetic_cycle,
 )
 
 
@@ -51,6 +57,9 @@ def main() -> None:
         test_candidate_baseline_windows_select_stable_low_count_segment,
         test_estimate_baseline_from_candidate_windows_uses_selected_windows,
         test_extract_threshold_events_groups_continuous_crossings,
+        test_compute_residual_series_subtracts_background_and_positive_component,
+        test_compute_residual_diagnostics_reports_positive_runs_and_energy,
+        test_estimate_dominant_period_detects_synthetic_cycle,
         test_parse_caving_condition_ignores_support_number,
         test_load_caving_condition_data_time_axis_and_labels,
         test_caving_features_and_component_separation,
@@ -62,6 +71,7 @@ def main() -> None:
         test_candidate_baseline_windows_outputs_candidates_for_each_condition,
         test_adaptive_threshold_methods_compare_all_conditions_and_methods,
         test_high_count_events_extract_event_level_metrics,
+        test_residual_diagnostics_outputs_condition_level_summary,
     ]
     for test in tests:
         test()

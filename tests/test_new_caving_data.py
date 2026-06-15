@@ -13,6 +13,7 @@ from src.new_data_workflow import (
     analyze_high_count_events,
     analyze_initial_baseline_sensitivity,
     analyze_poisson_fluctuation,
+    analyze_residual_diagnostics,
     analyze_stage_min_size_sensitivity,
     analyze_stage_rule_sensitivity,
 )
@@ -163,3 +164,14 @@ def test_high_count_events_extract_event_level_metrics():
     assert {"duration_s", "peak_value", "max_excess", "excess_area"}.issubset(events.columns)
     assert events["duration_s"].min() >= 0.3
     assert {"candidate_poisson_99", "candidate_reference_delta"}.issubset(set(events["method"]))
+
+
+def test_residual_diagnostics_outputs_condition_level_summary():
+    residuals, summary = analyze_residual_diagnostics()
+    assert len(residuals) == 1508
+    assert len(summary) == 3
+    assert set(summary["condition"]) == {"normal_caving", "minor_caving", "excessive_caving"}
+    assert {"residual_count_rate", "positive_residual_count_rate"}.issubset(residuals.columns)
+    assert summary["positive_area"].min() >= 0
+    assert summary["longest_positive_run_duration_s"].min() >= 0
+    assert summary["dominant_period_s"].notna().any()
