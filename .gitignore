@@ -48,7 +48,8 @@ new_data_analysis.py
 outputs/processed_radiation_features.csv
 outputs/changepoint_segments.csv
 outputs/state_counts.csv
-outputs/new_data/*.csv
+outputs/new_data/
+
 
 # Generated outputs (uncomment to exclude all outputs from repo)
 # outputs/
